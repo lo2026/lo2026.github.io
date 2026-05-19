@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SIEM Implementation and Threat Detection – Liam Ortiz</title>
+  <link rel="icon" href="../../images/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../../css/style.css">
+</head>
+<body>
+
+<nav aria-label="Main navigation">
+  <a href="../../index.html">Home</a>
+  <a href="../../projects.html">Projects</a>
+  <a href="../../experience.html">Experience</a>
+  <a href="../../contact.html">Contact</a>
+</nav>
+
+<main>
+  <h1>SIEM Implementation and Threat Detection</h1>
+  <p>March 2026</p>
+  
+  <figure>
+  <a href="../project-1/images/siem-project-image.webp" target="_blank">
+  <img src="../project-1/images/siem-project-image.webp" alt="An image of the Virtual Machines running" class="special-image">
+  </a>
+  <figcaption>Virtual lab environment showing Ubuntu Server, Kali Linux, and Windows 11.</figcaption>
+  <figcaption>Click or tap any image on this page to view full size.</figcaption>
+  </figure>
+  
+  <h2>Summary</h2>
+  <p>This report documents the deployment and validation of a controlled cybersecurity lab environment built on Oracle VirtualBox, consisting of four virtual machines. Two Windows 11 endpoints, an Ubuntu server running the Wazuh SIEM, and a Kali Linux attacker node, which are networked to simulate a segmented enterprise environment. Following initial resource provisioning challenges, the Wazuh SIEM was successfully deployed and integrated with endpoint agents. Three attack scenarios were executed: network reconnaissance via Nmap, an RDP brute-force attack using Hydra, and a simulated malware/PowerShell post-exploitation exercise. Of these, only the brute-force authentication attack generated reliable detections in Wazuh out-of-the-box, while reconnaissance and PowerShell-based activity went undetected under the default configuration. These gaps underscore the need for additional tuning and expanded detection rules to achieve broader threat visibility across the environment.</p>
+  
+  <h2>Setting up Virtual Machines</h2>
+  <p>As part of the lab environment preparation, I deployed a controlled virtual infrastructure using Oracle VM VirtualBox. This required installation of multiple operating system images to support endpoint, server, and adversary simulation use cases.</p>
+  <p>The environment consists of four virtual machines:</p>
+  <table class="simple-table">
+  <thead>
+    <tr>
+      <th>Host</th>
+      <th>Role</th>
+      <th>IP</th>
+      <th>OS</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>ubuntu</td>
+      <td>SIEM / Manager</td>
+      <td>192.168.56.107</td>
+      <td>Ubuntu Server</td>
+    </tr>
+    <tr>
+      <td>DESKTOP-E79UHMF</td>
+      <td>Endpoint (Agent)</td>
+      <td>192.168.56.101</td>
+      <td>Windows 11</td>
+    </tr>
+    <tr>
+      <td>DESKTOP-8L5S2E4</td>
+      <td>Endpoint (Agent)</td>
+      <td>192.168.56.102</td>
+      <td>Windows 11</td>
+    </tr>
+    <tr>
+      <td>kali</td>
+      <td>Attacker (simulated threat)</td>
+      <td>192.168.56.104</td>
+      <td>Kali Linux</td>
+    </tr>
+  </tbody>
+  </table>
+  <p>Network configuration was implemented to simulate a segmented enterprise environment. Each virtual machine was provisioned with two network interfaces:</p>
+  <ul>
+    <li>A NAT adapter to allow outbound internet connectivity for updates and package installation.</li>
+    <li>A Host-Only adapter to establish an isolated internal LAN for inter-VM communication and controlled attack simulation.</li>
+  </ul>
+  
+  <figure>
+  <a href="../project-1/images/network-adapter-1-of-kali-linux.webp" target="_blank">
+  <img src="../project-1/images/network-adapter-1-of-kali-linux.webp" alt="An image of Kali Linux VM's Network Adapter" class="special-image">
+  </a>
+  <figcaption>Kali Linux VM's Network Adapter 1 set to NAT for Internet connection.</figcaption>
+  </figure>
+  
+  <figure>
+  <a href="../project-1/images/network-adapter-2-of-kali-linux.webp" target="_blank">
+  <img src="../project-1/images/network-adapter-2-of-kali-linux.webp" alt="An image of Kali Linux VM's Network Adapter" class="special-image">
+  </a>
+  <figcaption>Kali Linux VM's Network Adapter 2 set to Host-only for an isolated internal LAN.</figcaption>
+  </figure>
+  
+  <p>To validate network functionality, I performed connectivity testing across all virtual machines. This required modifying default firewall configurations on the Windows 11 endpoints to permit ICMP echo requests, which are blocked by default.</p>
+  
+  <figure>
+  <a href="../project-1/images/windows-firewall-rules.webp" target="_blank">
+  <img src="../project-1/images/windows-firewall-rules.webp" alt="An image of Windows 11 Firewall Rules" class="special-image">
+  </a>
+  <figcaption>Enabled File and Printer Sharing (Echo Request - ICMPv4-In) in Windows Defender Firewall with Advanced Security.</figcaption>
+  </figure>
+  
+  <figure>
+  <a href="../project-1/images/ping-command-windows-vms.webp" target="_blank">
+  <img src="../project-1/images/ping-command-windows-vms.webp" alt="An image of Windows 11 virtual machine running ping command in command prompt" class="special-image">
+  </a>
+  <figcaption>Shows the IP address of the first Windows 11 VM (Solid rectangle). Shows the second Windows 11 VM successfully pinging the other Windows 11 VM (Long dashes rectangle).</figcaption>
+  </figure>
+  
+  <p>After adjusting these rules, I verified successful bidirectional communication using ICMP (ping), confirming that all systems were able to transmit and receive traffic across the internal network.</p>
+  
+  <h2>Installing Wazuh on Ubuntu Server</h2>
+  <p>During SIEM deployment, I utilized the automated installation script provided by Wazuh to deploy its core components: the Wazuh server, Wazuh indexer, and Wazuh dashboard on an Ubuntu Server host.</p>
+  
+  <figure>
+  <a href="../project-1/images/wazuh-automated-installation-script.webp" target="_blank">
+  <img src="../project-1/images/wazuh-automated-installation-script.webp" alt="An image of Wazuh installation script running on Ubuntu server" class="special-image">
+  </a>
+  <figcaption>Wazuh installation script running on Ubuntu server.</figcaption>
+  </figure>
+  
+  <p>Initial installation attempts failed due to insufficient system resources allocated to the virtual machine. The baseline configuration (2 CPU cores, 2GB RAM, and 50GB storage) proved inadequate, with the primary issue being disk exhaustion during the installation process, which caused repeated failures.</p>
+  
+  <figure>
+  <a href="../project-1/images/auth-credentials-for-wazuh-dashboard.webp" target="_blank">
+  <img src="../project-1/images/auth-credentials-for-wazuh-dashboard.webp" alt="An image of Wazuh authentication credentials" class="special-image">
+  </a>
+  <figcaption>Completed Wazuh installation showing authentication credentials.</figcaption>
+  </figure>
+  
+  <p>To remediate this, I increased the allocated storage to 100GB, which resolved the installation errors. Additionally, I scaled system resources to 6GB of RAM and 6 CPU cores to ensure optimal performance and stability of the SIEM environment under expected workload conditions. Following successful deployment, the installation process generated authentication credentials required to access the Wazuh dashboard.</p>
+  
+  <h2>Network reconnaissance via Kali Linux</h2>
+  <p>Within the isolated lab network, the adversary simulation host running Kali Linux was leveraged to perform network reconnaissance against internal assets. Given that all virtual machines reside on the same subnet, successful host discovery of the Windows 11 endpoints was expected.</p>
+  <p>Initial reconnaissance was conducted using Nmap host discovery (nmap -sn 192.168.56.0/24) to enumerate live systems within the network range. This scan identified active hosts, confirming the presence of the Windows endpoints and validating network visibility from the attacker perspective.</p>
+  
+  <figure>
+  <a href="../project-1/images/nmap-host-discovery.webp" target="_blank">
+  <img src="../project-1/images/nmap-host-discovery.webp" alt="An image of Kali Linux VM running Nmap" class="special-image">
+  </a>
+  <figcaption>Kali Linux virtual machine running Nmap.</figcaption>
+  </figure>
+  
+  <p>Following host identification, targeted enumeration was performed against the Windows 11 endpoint using a service and version detection scan (nmap -sV -sC -O 192.168.56.101). This activity aimed to identify exposed services, open ports, operating system details, and other relevant metadata that could support further exploitation.</p>
+  
+  <figure>
+  <a href="../project-1/images/targeted-enumeration-against-endpoint.webp" target="_blank">
+  <img src="../project-1/images/targeted-enumeration-against-endpoint.webp" alt="An image of Kali Linux VM running Nmap" class="special-image">
+  </a>
+  <figcaption>Kali Linux virtual machine running Nmap.</figcaption>
+  </figure>
+  
+  <p>To simulate more aggressive reconnaissance behavior and generate higher volumes of telemetry, an intensive scan (nmap -A -T4 192.168.56.101 192.168.56.102) was executed against both Windows systems. This included OS detection, script scanning, version detection, and traceroute functionality, effectively increasing the likelihood of detectable events.</p>
+  
+  <figure>
+  <a href="../project-1/images/aggressive-reconn-behavior-against-endpoint.webp" target="_blank">
+  <img src="../project-1/images/aggressive-reconn-behavior-against-endpoint.webp" alt="An image of Kali Linux VM running Nmap" class="special-image">
+  </a>
+  <figcaption>Kali Linux virtual machine aggressively running Nmap.</figcaption>
+  </figure>
+  
+  <p>Despite generating this activity, analysis within the Wazuh dashboard, specifically within threat hunting and log monitoring views, did not reveal alerts corresponding to network reconnaissance behavior. This indicates that default detection rules were not configured to flag Nmap-based scanning or similar reconnaissance techniques out-of-the-box.</p>
+  <p>However, this gap shows an opportunity for detection engineering. With proper rule tuning and potentially enabling additional data sources (enhanced Windows logging or network-based telemetry), this type of reconnaissance activity can be effectively identified and alerted on within the SIEM environment.</p>
+  
+  <h2>Brute Force Attack</h2>
+  <p>To simulate a credential-based attack scenario, I first enabled Remote Desktop Protocol (RDP) on the Windows 11 endpoints to expose a remote access service for targeting. This configuration created an attack surface that could be leveraged from the adversary simulation host running Kali Linux.</p>
+  
+  <figure>
+  <a href="../project-1/images/enabling-remote-desktop-protocol-windows-11.webp" target="_blank">
+  <img src="../project-1/images/enabling-remote-desktop-protocol-windows-11.webp" alt="An image of Windows 11 virtual machine" class="special-image">
+  </a>
+  <figcaption>Enabling Remote Desktop in the Windows 11 Settings app.</figcaption>
+  </figure>
+  
+  <p>With RDP accessible, I initiated a credential stuffing attack using Hydra against the Windows 11 virtual machine. The attack leveraged a commonly used password wordlist (rockyou.txt) to attempt authentication over the RDP service (hydra -l User2 -P /usr/share/wordlists/rockyou.txt rdp://192.168.56.102 -t 4 -V). This approach simulates real-world adversary behavior using known leaked or weak credentials.</p>
+  
+  <figure>
+  <a href="../project-1/images/hydra-attack-on-user2-windows-11.webp" target="_blank">
+  <img src="../project-1/images/hydra-attack-on-user2-windows-11.webp" alt="An image of Windows 11 virtual machine and Kali Linux virtual machine" class="special-image">
+  </a>
+  <figcaption>Kali Linux virtual machine running Hydra against the Windows 11 virtual machine.</figcaption>
+  </figure>
+  
+  <p>During testing, I observed inconsistent results related to RDP service availability. When RDP was enabled on one endpoint (192.168.56.101) without a system restart, the attack did not produce observable results or authentication attempts. However, after enabling RDP on the second endpoint (192.168.56.102) and performing a system reboot, the service appeared to initialize correctly, allowing the attack to proceed as expected.</p>
+  
+  <figure>
+  <a href="../project-1/images/hydra-failure-user1-freerdp-connection-fail.webp" target="_blank">
+  <img src="../project-1/images/hydra-failure-user1-freerdp-connection-fail.webp" alt="An image of Windows 11 virtual machine and Kali Linux virtual machine" class="special-image">
+  </a>
+  <figcaption>Hydra failing to establish connection via RDP to Windows 11 virtual machine.</figcaption>
+  </figure>
+  
+  <p>Subsequently, the credential stuffing activity generated multiple failed logon attempts, which were successfully ingested and detected by the Wazuh agent deployed on the target Windows 11 system. These events were visible within the Wazuh dashboard under the agent’s threat hunting interface, specifically within the “Events” view, where failed authentication attempts were logged and correlated.</p>
+  
+  <figure>
+  <a href="../project-1/images/multiple-failed-logon-attempts-wazuh-dashboard.webp" target="_blank">
+  <img src="../project-1/images/multiple-failed-logon-attempts-wazuh-dashboard.webp" alt="An image of Wazuh dashboard showing events" class="special-image">
+  </a>
+  <figcaption>Wazuh dashboard in Microsoft Edge showing the multiple failed login attempts from Hydra.</figcaption>
+  </figure>
+  
+  <p>This exercise demonstrates successful detection of brute-force style authentication attacks at the endpoint level, while also showing the importance of proper service initialization and system state validation (post-configuration reboot) when exposing services for testing or monitoring purposes.</p>
+
+  <h2>Powershell and staged payload</h2>
+  <p>To simulate malware execution and post-exploitation behavior, I conducted a two-part attack scenario involving a known test payload and suspicious PowerShell activity on the Windows 11 endpoints. This exercise was designed to reflect common adversary techniques, including payload delivery and living-off-the-land (LOTL) activity.</p>
+  <p>I began by creating the industry-standard EICAR test file on a Windows endpoint using PowerShell. This file safely simulates malicious behavior without introducing real malware. Upon execution, Microsoft Defender detected and quarantined the file, generating a security alert.</p>
+  
+  <figure>
+  <a href="../project-1/images/EICAR-test-file-windows-defender.webp" target="_blank">
+  <img src="../project-1/images/EICAR-test-file-windows-defender.webp" alt="An image of Windows 11 running PowerShell commands" class="special-image">
+  </a>
+  <figcaption>Creating the EICAR test file on Windows 11 virtual machine using PowerShell.</figcaption>
+  </figure>
+  
+  <p>After integrating Defender logs into the Wazuh event pipeline, the alert was successfully ingested and made visible within the Wazuh dashboard. This confirmed that endpoint protection telemetry was being properly collected and correlated, providing visibility into malware-related activity.</p>
+  
+  <figure>
+  <a href="../project-1/images/EICAR-integrating-windows-defender-logs-into-wazuh.webp" target="_blank">
+  <img src="../project-1/images/EICAR-integrating-windows-defender-logs-into-wazuh.webp" alt="An image of Windows 11 running VS Code" class="special-image">
+  </a>
+  <figcaption>Adding Windows Defender logs into the Wazuh dashboard events by editing Wazuh's configuration file with VS Code.</figcaption>
+  </figure>
+  
+  <figure>
+  <a href="../project-1/images/EICAR-wazuh-dashboard-event-logs.webp" target="_blank">
+  <img src="../project-1/images/EICAR-wazuh-dashboard-event-logs.webp" alt="An image of Windows 11 running Microsoft Edge" class="special-image">
+  </a>
+  <figcaption>Wazuh dashboard in Microsoft Edge showing Windows Defender logs from EICAR test file in events.</figcaption>
+  </figure>
+  
+  <p>To simulate post-exploitation behavior, I executed several PowerShell techniques commonly associated with adversary activity, including:</p>
+  <ul>
+    <li>
+    Encoded command execution to obscure intent
+    </li>
+    <li>
+    File download from a remote host to simulate payload staging
+    </li>
+    <li>
+    Attempts to modify system security settings
+    </li>
+  </ul>
+  
+  <figure>
+  <a href="../project-1/images/suspicious-powershell-script.webp" target="_blank">
+  <img src="../project-1/images/suspicious-powershell-script.webp" alt="An image of Windows 11 running VS Code" class="special-image">
+  </a>
+  <figcaption>Creating a suspicious PowerShell script in VS Code.</figcaption>
+  </figure>
+  
+  <p>A simple HTTP server was also hosted on the Kali Linux system to emulate payload delivery infrastructure.</p>
+  
+  <figure>
+  <a href="../project-1/images/kali-http-server-and-fake-payload.webp" target="_blank">
+  <img src="../project-1/images/kali-http-server-and-fake-payload.webp" alt="An image of Kali Linux running commands in terminal" class="special-image">
+  </a>
+  <figcaption>Creating a fake payload (text file) and hosting a http server via Python to serve the payload in Kali Linux VM.</figcaption>
+  </figure>
+  
+  <p>While these actions successfully generated activity on the endpoint, no corresponding alerts were observed within Wazuh for the PowerShell-based behavior. This outcome is consistent with a default deployment where more advanced logging and detection use cases, such as detailed PowerShell monitoring, require additional configuration and tuning.</p>
+  
+  <h2>Resources Used</h2>
+  <ul>
+    <li>
+    <a href="https://www.virtualbox.org/">https://www.virtualbox.org/</a>
+    </li>
+    <li>
+    <a href="https://ubuntu.com/server">https://ubuntu.com/server</a>
+    </li>
+    <li>
+    <a href="https://www.microsoft.com/en-us/software-download/windows11">https://www.microsoft.com/en-us/software-download/windows11</a>
+    </li>
+    <li>
+    <a href="https://www.kali.org/get-kali/#kali-virtual-machines">https://www.kali.org/get-kali/#kali-virtual-machines</a>
+    </li>
+    <li>
+    <a href="https://documentation.wazuh.com/current/quickstart.html">https://documentation.wazuh.com/current/quickstart.html</a>
+    </li>
+    <li>
+    <a href="https://nmap.org/book/man-host-discovery.html">https://nmap.org/book/man-host-discovery.html</a>
+    </li>
+    <li>
+    <a href="https://documentation.wazuh.com/current/proof-of-concept-guide/detect-brute-force-attack.html">https://documentation.wazuh.com/current/proof-of-concept-guide/detect-brute-force-attack.html</a>
+    </li>
+    <li>
+    <a href="https://documentation.wazuh.com/current/proof-of-concept-guide/detect-remove-malware-virustotal.html">https://documentation.wazuh.com/current/proof-of-concept-guide/detect-remove-malware-virustotal.html</a>
+    </li>
+    <li>
+    <a href="https://documentation.wazuh.com/current/user-manual/capabilities/malware-detection/win-defender-logs-collection.html">https://documentation.wazuh.com/current/user-manual/capabilities/malware-detection/win-defender-logs-collection.html</a>
+    </li>
+  </ul>
+</main>
+
+<footer>
+  © 2026 Liam Ortiz
+</footer>
+
+</body>
+</html>
